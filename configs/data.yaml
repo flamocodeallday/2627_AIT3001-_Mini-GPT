@@ -1,0 +1,45 @@
+dataset:
+  name: "wikimedia/wikipedia"
+  config: "20231101.vi"
+  split: "train"
+  text_field: "text"
+
+cleaning:
+  min_chars: 250
+  min_valid_char_ratio: 0.85
+  min_letter_ratio: 0.45
+  strip_sections:
+    - "Xem thêm"
+    - "Tham khảo"
+    - "Chú thích"
+    - "Liên kết ngoài"
+    - "Đọc thêm"
+    - "Tài liệu tham khảo"
+    - "Nguồn"
+
+dedup:
+  method: "sha256_exact"
+
+split:
+  seed: 42
+  ratios:
+    train: 0.98
+    val: 0.01
+    test: 0.01
+
+v0_byte:
+  version: "v0_byte"
+  target_mb:
+    train: 10.0
+    val: 1.0
+    test: 1.0
+
+bpe:
+  vocab_size: 8192
+  train_sample_mb: 40.0
+  seed: 42
+
+paths:
+  fixtures_file: "fixtures/sample_vi_wiki.jsonl"
+  interim_dir: "data/interim/cleaned_splits"
+  processed_dir: "data/processed"

@@ -1,0 +1,32 @@
+# Python & Virtual Environments
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Large data, binaries, checkpoints, and outputs (keep fixtures/ tracked)
+data/raw/
+data/interim/
+data/processed/
+*.bin
+*.parquet
+*.jsonl.zst
+*.jsonl.gz
+checkpoints/
+wandb/
+logs/
+
+# OS & Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
