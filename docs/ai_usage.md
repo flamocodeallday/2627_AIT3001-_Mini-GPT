@@ -20,3 +20,12 @@
   - Cài đặt `src/data/pack.py` (`ByteTokenizer` `vocab_size=257`, `eos_id=256`, mặc định `allow_special=False`, hàm `build_bins` ghi đệm `uint16`, `MemmapDataset`), CLI `scripts/pack_data.py`, snippet PyTorch trong `README.md` và `tests/test_pack.py`.
 - **Kiểm chứng & nắm bắt kiến thức:**
   - Xác nhận cơ chế mã hóa byte thô không đụng `eos_id` khi gặp chuỗi literal `<|endoftext|>`, chèn đúng 1 `eos_id` giữa các bài, đếm `n_chars` theo đúng text sau chuẩn hóa, và chạy `pytest` + CLI `--sanity-check` trên fixtures (15 passed).
+
+### Gói 3: Tự cài đặt Regex-BPE (`src/data/bpe.py`, `18/11/2026`)
+- **Công cụ sử dụng:** Trợ lý AI lập trình (Antigravity).
+- **Mục đích:**
+  - Thiết kế lớp `CustomBPE` kế thừa `BaseTokenizer` với regex pre-tokenization riêng cho tiếng Việt (`[\p{L}\p{M}]+` giữ liền dấu tổ hợp), train theo tần suất cụm pre-token duy nhất kết hợp chỉ mục đảo `pair_to_chunks` + max-heap cập nhật gia tăng, encode có memoization cache (giới hạn dung lượng để không tràn RAM trên 1,6 GB) và `save`/`load` 1 file JSON mã hóa Base64.
+  - Viết `tests/test_bpe.py` kiểm chứng đối chiếu với vòng lặp BPE tham chiếu, ca biên tiếng Việt NFC/NFD, emoji, ký tự điều khiển, `<|endoftext|>`, và tích hợp `build_bins`.
+- **Kiểm chứng & nắm bắt kiến thức:**
+  - Hiểu rõ bất biến cập nhật delta trong `pair_counts` và lý do phải đẩy lại cặp vào heap khi tần suất giảm (lazy deletion heap).
+  - Chạy `pytest -v` toàn bộ repo (19 passed).
