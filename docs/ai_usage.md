@@ -29,3 +29,13 @@
 - **Kiểm chứng & nắm bắt kiến thức:**
   - Hiểu rõ bất biến cập nhật delta trong `pair_counts` và lý do phải đẩy lại cặp vào heap khi tần suất giảm (lazy deletion heap).
   - Chạy `pytest -v` toàn bộ repo (19 passed).
+
+### Gói 4 (Bước 1): Khảo sát cỡ từ vựng & Đối chiếu thư viện chuẩn (`18/11/2026`)
+- **Công cụ sử dụng:** Trợ lý AI lập trình (Antigravity).
+- **Mục đích:**
+  - Viết module `src/data/vocab_eval.py` và CLI `scripts/benchmark_vocab.py` để train & lưu `custom_bpe{4096,8192,16384}.json`, tính Compression Ratio (`n_bytes/n_tokens`, `n_chars/n_tokens`), Fertility (`n_tokens/n_words`), tốc độ train/encode và chi phí tham số Embedding ($V \times d_{\text{model}}$ với $d_{\text{model}} \in \{256, 384, 512\}$, weight tying) trên ngân sách 10M và 30M.
+  - Đối chiếu trực tiếp trên cùng mẫu `train` và `val` với Byte-level BPE của HuggingFace `tokenizers` (chỉ dùng benchmark theo Quyết định #5).
+  - Viết `tests/test_vocab_benchmark.py` test trên `fixtures` với cỡ vocab `[300, 350]`.
+- **Kiểm chứng & nắm bắt kiến thức:**
+  - Hiểu rõ ý nghĩa của weight tying ($V \times d_{\text{model}}$ dùng chung cho embedding và LM head) và lý do so sánh BPC/compression ratio thay vì perplexity giữa các tokenizer khác cỡ vocab.
+  - Chạy `pytest -v` toàn bộ repo (21 passed) và chạy thử CLI `benchmark_vocab` trên `fixtures`.

@@ -44,6 +44,22 @@ pytest
     --sanity-check
   ```
 
+### Gói 4: Khảo sát kích thước từ vựng (`4096`, `8192`, `16384`) & Đối chiếu `tokenizers`
+- Chạy test nhanh trên fixtures local:
+  ```powershell
+  python -m scripts.benchmark_vocab --source fixtures --train-mb 0.5 --vocab-sizes 300 350 --out-dir results/vocab_fixture
+  ```
+- Chạy thực chiến trên Google Colab Pro (trích 40 MB từ `train`, đánh giá trên toàn bộ `val`, xuất `custom_bpe*.json`, `vocab_benchmark.json` và `vocab_benchmark.md`):
+  ```bash
+  python -m scripts.benchmark_vocab \
+    --config configs/data.yaml \
+    --source interim \
+    --interim-dir /content/drive/MyDrive/minigpt/interim/cleaned_splits \
+    --train-mb 40 \
+    --vocab-sizes 4096 8192 16384 \
+    --out-dir /content/drive/MyDrive/minigpt/vocab_benchmark
+  ```
+
 ### Tích hợp đọc `.bin` bằng PyTorch cho Thành viên 2 (`MemmapDataset`)
 
 ```python

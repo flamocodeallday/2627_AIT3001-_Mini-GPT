@@ -211,3 +211,31 @@ def write_splits_streaming(
         )
 
     return {"files": file_paths, "stats_file": str(stats_path), "stats": stats}
+
+
+def resolve_split_files(interim_dir: str | Path) -> dict[str, Path]:
+    """Resolve train/val/test JSONL(.zst) paths using `split_stats.json` or folder scan."""
+    base_dir = Path(interim_dir)
+    stats_path = base_dir / "split_stats.json"
+    recorded: dict[str, str] = {}
+    if stats_path.exists():
+        payload = json.loads(stats_path.read_text(encoding="utf-8"))
+        recorded = {str(k): str(v) for k, v in payload.get("files", {}).items()}
+
+    resolved: dict[str, Path] = {}
+    for split_name in SPLIT_NAMES:
+        candidates: list[Path] = []
+        if split_name in recorded:
+            rec_path = Path(recorded[split_name])
+            candidates.append(rec_path)
+            candidates.append(base_dir / rec_path.name)
+        candidates.append(base_dir / f"{split_name}.jsonl.zst")
+        candidates.append(base_dir / f"{split_name}.jsonl")
+
+        found = next((p for p in candidates if p.is_file()), None)
+        if found is None:
+            raise FileNotFoundError(
+                f"Could not find split '{split_name}' (.jsonl or .jsonl.zst) in {base_dir}"
+            )
+        resolved[split_name] = found
+    return resolved

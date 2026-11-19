@@ -10,15 +10,7 @@ import numpy as np
 
 from src.data.config import load_data_config
 from src.data.pack import ByteTokenizer, build_bins
-from src.data.split import iter_jsonl_texts
-
-
-def _find_split_file(interim_dir: Path, split_name: str) -> Path:
-    for ext in (".jsonl.zst", ".jsonl"):
-        candidate = interim_dir / f"{split_name}{ext}"
-        if candidate.exists():
-            return candidate
-    raise FileNotFoundError(f"Could not find {split_name}.jsonl or {split_name}.jsonl.zst in {interim_dir}")
+from src.data.split import iter_jsonl_texts, resolve_split_files
 
 
 def sanity_check_bins(processed_dir: Path, tokenizer: ByteTokenizer, preview_tokens: int = 120) -> None:
@@ -56,8 +48,9 @@ def main() -> None:
     interim_dir = Path(args.interim_dir or cfg["paths"]["interim_dir"])
     output_dir = Path(args.output_dir or (Path(cfg["paths"]["processed_dir"]) / version))
 
+    split_files = resolve_split_files(interim_dir)
     splits = {
-        name: iter_jsonl_texts(_find_split_file(interim_dir, name))
+        name: iter_jsonl_texts(split_files[name])
         for name in ("train", "val", "test")
     }
     target_mb = None if args.full else v0_cfg.get("target_mb")
