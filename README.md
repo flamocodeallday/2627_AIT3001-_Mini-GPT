@@ -60,6 +60,18 @@ pytest
     --out-dir /content/drive/MyDrive/minigpt/vocab_benchmark
   ```
 
+### Gói 5: Encode song song toàn bộ corpus thành `v1_bpe8192`
+- Nạp trực tiếp `custom_bpe8192.json` đã chốt từ Gói 4, chạy `ProcessPoolExecutor` trên toàn bộ `train`/`val`/`test` (không giới hạn `target_mb`) và kiểm tra chéo `.bin`:
+  ```bash
+  python -m scripts.pack_data \
+    --config configs/data.yaml \
+    --interim-dir /content/drive/MyDrive/minigpt/interim/cleaned_splits \
+    --tokenizer-path /content/drive/MyDrive/minigpt/vocab_benchmark/custom_bpe8192.json \
+    --output-dir /content/drive/MyDrive/minigpt/processed/v1_bpe8192 \
+    --batch-size 500 \
+    --sanity-check
+  ```
+
 ### Tích hợp đọc `.bin` bằng PyTorch cho Thành viên 2 (`MemmapDataset`)
 
 ```python

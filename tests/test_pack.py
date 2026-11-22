@@ -9,9 +9,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from src.data.bpe import CustomBPE
 from src.data.clean import clean_and_dedup_stream
 from src.data.pack import ByteTokenizer, MemmapDataset, build_bins
-from src.data.split import iter_jsonl_texts, split_by_document
+from src.data.split import iter_jsonl_texts, split_by_document, write_splits_streaming
 from src.data.tokenizer_base import compute_file_sha256
 
 
@@ -135,3 +136,97 @@ def test_build_bins_and_memmap_dataset_on_fixtures(tmp_path: Path) -> None:
     assert x.shape == (64,) and y.shape == (64,)
     assert x.dtype == np.int64 and y.dtype == np.int64
     assert np.array_equal(x[1:], y[:-1])
+
+
+def test_build_bins_parallel_matches_single_worker_bit_for_bit(tmp_path: Path) -> None:
+    fixture_path = Path("fixtures/sample_vi_wiki.jsonl")
+    cleaned = list(clean_and_dedup_stream(iter_jsonl_texts(fixture_path)))
+    splits = split_by_document(cleaned, ratios=(0.90, 0.05, 0.05), seed=42)
+
+    bpe = CustomBPE()
+    bpe.train(splits["train"], vocab_size=512)
+    prebuilt_tok = tmp_path / "custom_bpe512.json"
+    bpe.save(prebuilt_tok)
+    expected_hash = compute_file_sha256(prebuilt_tok)
+
+    out_single = tmp_path / "out_w1"
+    out_parallel = tmp_path / "out_w2"
+
+    meta_w1 = build_bins(
+        splits=splits,
+        tokenizer=bpe,
+        output_dir=out_single,
+        version="v1_bpe512",
+        tokenizer_type="custom_regex_bpe",
+        seed=42,
+        tokenizer_source_path=prebuilt_tok,
+        workers=1,
+        batch_size=25,
+    )
+    meta_w2 = build_bins(
+        splits=splits,
+        tokenizer=bpe,
+        output_dir=out_parallel,
+        version="v1_bpe512",
+        tokenizer_type="custom_regex_bpe",
+        seed=42,
+        tokenizer_source_path=prebuilt_tok,
+        workers=2,
+        batch_size=25,
+    )
+
+    assert meta_w1 == meta_w2
+    assert meta_w2["tokenizer_hash"] == expected_hash
+    assert (out_parallel / "tokenizer.json").read_bytes() == prebuilt_tok.read_bytes()
+
+    for split_name in ("train", "val", "test"):
+        b1 = (out_single / f"{split_name}.bin").read_bytes()
+        b2 = (out_parallel / f"{split_name}.bin").read_bytes()
+        assert b1 == b2
+        arr = np.memmap(out_parallel / f"{split_name}.bin", dtype="<u2", mode="r")
+        assert int(np.sum(arr == bpe.eos_id)) == len(splits[split_name]) - 1
+
+
+def test_pack_data_cli_bpe_parallel_and_sanity_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from scripts.pack_data import main as pack_main
+
+    fixture_path = Path("fixtures/sample_vi_wiki.jsonl")
+    cleaned = list(clean_and_dedup_stream(iter_jsonl_texts(fixture_path)))
+    interim_dir = tmp_path / "interim"
+    write_splits_streaming(cleaned, output_dir=interim_dir, ratios=(0.90, 0.05, 0.05), seed=42)
+
+    bpe = CustomBPE()
+    bpe.train(iter_jsonl_texts(interim_dir / "train.jsonl"), vocab_size=400)
+    tok_path = tmp_path / "custom_bpe400.json"
+    bpe.save(tok_path)
+
+    out_dir = tmp_path / "v1_bpe400"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "scripts.pack_data",
+            "--config",
+            "configs/data.yaml",
+            "--interim-dir",
+            str(interim_dir),
+            "--output-dir",
+            str(out_dir),
+            "--tokenizer-path",
+            str(tok_path),
+            "--workers",
+            "2",
+            "--batch-size",
+            "25",
+            "--sanity-check",
+        ],
+    )
+    pack_main()
+
+    meta = json.loads((out_dir / "meta.json").read_text(encoding="utf-8"))
+    assert meta["version"] == "v1_bpe400"
+    assert meta["tokenizer_type"] == "custom_regex_bpe"
+    assert meta["vocab_size"] == 400
+    assert meta["tokenizer_hash"] == compute_file_sha256(tok_path)
+    assert (out_dir / "tokenizer.json").read_bytes() == tok_path.read_bytes()

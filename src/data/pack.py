@@ -1,16 +1,63 @@
-"""ByteTokenizer (v0), streaming binary `.bin` packer, and sample MemmapDataset."""
+"""ByteTokenizer (v0), parallel/streaming binary `.bin` packer, and sample MemmapDataset."""
 
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
+import struct
+from collections import deque
 from collections.abc import Iterable, Iterator, Mapping, Sequence
+from concurrent.futures import Future, ProcessPoolExecutor
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 from src.data.tokenizer_base import EOS_TOKEN, BaseTokenizer, compute_file_sha256
+
+_WORKER_TOKENIZER: BaseTokenizer | None = None
+
+
+def load_tokenizer(path: str | Path) -> BaseTokenizer:
+    """Load a saved ByteTokenizer or CustomBPE from a single JSON file."""
+    tok_path = Path(path)
+    payload = json.loads(tok_path.read_text(encoding="utf-8"))
+    tok_type = payload.get("tokenizer_type")
+    if tok_type == "byte_level":
+        return ByteTokenizer.load(tok_path)
+    if tok_type == "custom_regex_bpe":
+        from src.data.bpe import CustomBPE
+
+        return CustomBPE.load(tok_path)
+    raise ValueError(f"Unsupported tokenizer_type={tok_type!r} in {tok_path}")
+
+
+def _init_worker(tokenizer_path: str) -> None:
+    """ProcessPoolExecutor initializer: load tokenizer once per worker process."""
+    global _WORKER_TOKENIZER
+    _WORKER_TOKENIZER = load_tokenizer(tokenizer_path)
+
+
+def _encode_doc_batch(batch: list[str]) -> tuple[bytes, int, int, int]:
+    """Encode a batch of documents in a worker process into packed uint16 bytes."""
+    if _WORKER_TOKENIZER is None:
+        raise RuntimeError("Worker tokenizer was not initialized")
+
+    tok = _WORKER_TOKENIZER
+    eos_id = int(tok.eos_id)
+    ids: list[int] = []
+    n_chars = 0
+
+    for idx, doc in enumerate(batch):
+        if idx > 0:
+            ids.append(eos_id)
+        ids.extend(tok.encode(doc, allow_special=False))
+        n_chars += len(doc)
+
+    raw_bytes = np.asarray(ids, dtype="<u2").tobytes() if ids else b""
+    return raw_bytes, len(batch), len(ids), n_chars
 
 
 class ByteTokenizer(BaseTokenizer):
@@ -118,13 +165,25 @@ def slice_docs_by_utf8_bytes(
             break
 
 
+def _iter_doc_batches(docs: Iterable[str], batch_size: int) -> Iterator[list[str]]:
+    """Group streaming documents into bounded lists of at most `batch_size` items."""
+    batch: list[str] = []
+    for doc in docs:
+        batch.append(doc)
+        if len(batch) >= batch_size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
+
+
 def _pack_single_split(
     docs: Iterable[str],
     tokenizer: BaseTokenizer,
     out_bin_path: Path,
     flush_tokens: int = 1_000_000,
 ) -> dict[str, int]:
-    """Stream-encode documents, insert 1 `eos_id` between documents, and write uint16 `.bin`."""
+    """Stream-encode documents in-process, insert 1 `eos_id` between docs, and write uint16 `.bin`."""
     eos_id = int(tokenizer.eos_id)
     n_docs = 0
     n_tokens = 0
@@ -157,6 +216,75 @@ def _pack_single_split(
     return {"n_docs": n_docs, "n_tokens": n_tokens, "n_chars": n_chars}
 
 
+def _pack_single_split_parallel(
+    docs: Iterable[str],
+    tokenizer: BaseTokenizer,
+    tokenizer_path: Path,
+    out_bin_path: Path,
+    workers: int,
+    batch_size: int = 500,
+) -> dict[str, int]:
+    """Encode a split in batched streaming order using `ProcessPoolExecutor`."""
+    batch_iter = _iter_doc_batches(docs, batch_size=batch_size)
+    first_batch = next(batch_iter, None)
+
+    out_bin_path.parent.mkdir(parents=True, exist_ok=True)
+    if first_batch is None:
+        out_bin_path.write_bytes(b"")
+        return {"n_docs": 0, "n_tokens": 0, "n_chars": 0}
+
+    # If the entire split fits in one batch, avoid subprocess startup overhead.
+    second_batch = next(batch_iter, None)
+    if second_batch is None:
+        return _pack_single_split(first_batch, tokenizer=tokenizer, out_bin_path=out_bin_path)
+
+    eos_bytes = struct.pack("<H", int(tokenizer.eos_id))
+    max_in_flight = max(workers * 2, 4)
+    n_docs = 0
+    n_tokens = 0
+    n_chars = 0
+
+    def _write_batch_result(
+        file_obj: Any,
+        raw_bytes: bytes,
+        b_docs: int,
+        b_tokens: int,
+        b_chars: int,
+    ) -> None:
+        nonlocal n_docs, n_tokens, n_chars
+        if b_docs <= 0:
+            return
+        if n_docs > 0:
+            file_obj.write(eos_bytes)
+            n_tokens += 1
+        if raw_bytes:
+            file_obj.write(raw_bytes)
+        n_docs += b_docs
+        n_tokens += b_tokens
+        n_chars += b_chars
+
+    with out_bin_path.open("wb") as f, ProcessPoolExecutor(
+        max_workers=workers,
+        initializer=_init_worker,
+        initargs=(str(tokenizer_path),),
+    ) as executor:
+        in_flight: deque[Future[tuple[bytes, int, int, int]]] = deque()
+        in_flight.append(executor.submit(_encode_doc_batch, first_batch))
+        in_flight.append(executor.submit(_encode_doc_batch, second_batch))
+
+        for batch in batch_iter:
+            while len(in_flight) >= max_in_flight:
+                raw_bytes, b_docs, b_tokens, b_chars = in_flight.popleft().result()
+                _write_batch_result(f, raw_bytes, b_docs, b_tokens, b_chars)
+            in_flight.append(executor.submit(_encode_doc_batch, batch))
+
+        while in_flight:
+            raw_bytes, b_docs, b_tokens, b_chars = in_flight.popleft().result()
+            _write_batch_result(f, raw_bytes, b_docs, b_tokens, b_chars)
+
+    return {"n_docs": n_docs, "n_tokens": n_tokens, "n_chars": n_chars}
+
+
 def build_bins(
     splits: Mapping[str, Iterable[str]],
     tokenizer: BaseTokenizer,
@@ -166,6 +294,9 @@ def build_bins(
     seed: int,
     target_mb: Mapping[str, float] | None = None,
     tokenizer_filename: str = "tokenizer.json",
+    tokenizer_source_path: str | Path | None = None,
+    workers: int | None = None,
+    batch_size: int = 500,
     flush_tokens: int = 1_000_000,
 ) -> dict[str, Any]:
     """Pack train/val/test streams into uint16 `.bin` files and write `meta.json`.
@@ -173,23 +304,38 @@ def build_bins(
     Args:
         splits: Mapping of split name ("train", "val", "test") to document iterables.
         tokenizer: Tokenizer implementing `encode(str, allow_special=False)`, `save`, `vocab_size`, `eos_id`.
-        output_dir: Destination directory (e.g. `data/processed/v0_byte`).
+        output_dir: Destination directory (e.g. `data/processed/v0_byte` or `v1_bpe8192`).
         version: Dataset version tag (e.g. `"v0_byte"` or `"v1_bpe8192"`).
         tokenizer_type: Identifier written to `meta.json` (e.g. `"byte_level"`, `"custom_regex_bpe"`).
         seed: Random seed used when splitting the corpus.
-        target_mb: Optional per-split UTF-8 byte cap in MiB (e.g. `{"train": 10.0, "val": 1.0, "test": 1.0}`).
+        target_mb: Optional per-split UTF-8 byte cap in MiB (None encodes full splits).
         tokenizer_filename: Filename for saved tokenizer JSON inside `output_dir`.
-        flush_tokens: Buffer size in tokens before flushing binary chunk to disk.
+        tokenizer_source_path: Optional pre-saved tokenizer JSON path to copy verbatim to preserve SHA-256.
+        workers: Number of worker processes (`None` uses `os.cpu_count() or 1`; `1` runs single-process).
+        batch_size: Number of documents per worker batch when `workers > 1`.
+        flush_tokens: Buffer size in tokens before flushing binary chunk in single-process mode.
 
     Returns:
         The complete `meta.json` dictionary.
     """
     assert tokenizer.vocab_size <= 65535, f"vocab_size {tokenizer.vocab_size} exceeds uint16 max (65535)"
+    if batch_size <= 0:
+        raise ValueError(f"batch_size must be positive, got {batch_size}")
+
+    n_workers = max(1, os.cpu_count() or 1) if workers is None else max(1, int(workers))
 
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    dest_tok_path = out_dir / tokenizer_filename
 
-    tok_path = tokenizer.save(out_dir / tokenizer_filename)
+    if tokenizer_source_path is not None:
+        src_tok_path = Path(tokenizer_source_path)
+        if src_tok_path.resolve() != dest_tok_path.resolve():
+            shutil.copy2(src_tok_path, dest_tok_path)
+        tok_path = dest_tok_path
+    else:
+        tok_path = tokenizer.save(dest_tok_path)
+
     tok_hash = compute_file_sha256(tok_path)
 
     split_stats: dict[str, dict[str, int]] = {}
@@ -202,12 +348,24 @@ def build_bins(
             max_bytes = int(float(target_mb[split_name]) * 1024 * 1024)
 
         doc_stream = slice_docs_by_utf8_bytes(splits[split_name], max_bytes=max_bytes)
-        split_stats[split_name] = _pack_single_split(
-            doc_stream,
-            tokenizer=tokenizer,
-            out_bin_path=out_dir / f"{split_name}.bin",
-            flush_tokens=flush_tokens,
-        )
+        out_bin = out_dir / f"{split_name}.bin"
+
+        if n_workers > 1:
+            split_stats[split_name] = _pack_single_split_parallel(
+                doc_stream,
+                tokenizer=tokenizer,
+                tokenizer_path=tok_path,
+                out_bin_path=out_bin,
+                workers=n_workers,
+                batch_size=batch_size,
+            )
+        else:
+            split_stats[split_name] = _pack_single_split(
+                doc_stream,
+                tokenizer=tokenizer,
+                out_bin_path=out_bin,
+                flush_tokens=flush_tokens,
+            )
 
     meta: dict[str, Any] = {
         "version": version,

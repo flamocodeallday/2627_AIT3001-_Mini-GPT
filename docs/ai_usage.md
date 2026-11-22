@@ -39,3 +39,13 @@
 - **Kiểm chứng & nắm bắt kiến thức:**
   - Hiểu rõ ý nghĩa của weight tying ($V \times d_{\text{model}}$ dùng chung cho embedding và LM head) và lý do so sánh BPC/compression ratio thay vì perplexity giữa các tokenizer khác cỡ vocab.
   - Chạy `pytest -v` toàn bộ repo (21 passed) và chạy thử CLI `benchmark_vocab` trên `fixtures`.
+
+### Gói 5 (Phần 1): Đóng gói song song `v1_bpe8192` bằng `ProcessPoolExecutor` (`22/11/2026`)
+- **Công cụ sử dụng:** Trợ lý AI lập trình (Antigravity).
+- **Mục đích:**
+  - Nâng cấp `src/data/pack.py` (`build_bins`, `_pack_single_split_parallel`, `load_tokenizer`) và `scripts/pack_data.py` hỗ trợ `--tokenizer-path` (copy nguyên file `tokenizer.json` để giữ nguyên SHA-256 `tokenizer_hash`) và `--workers` (mặc định `os.cpu_count()`).
+  - Thiết kế pipeline đọc-xử lý-ghi theo lô (`batch_size=500`, hàng đợi `deque` giới hạn `max_in_flight = max(workers*2, 4)`), worker nạp `CustomBPE` một lần qua `initializer` và trả về buffer `uint16` bytes gọn nhẹ để giữ nguyên thứ tự bài viết, chèn đúng 1 `eos_id` giữa các bài và không tràn RAM trên ~1,15 GiB corpus.
+  - Bổ sung unit test trong `tests/test_pack.py` kiểm chứng `workers=2` khớp từng bit với `workers=1` và chạy CLI `--sanity-check`.
+- **Kiểm chứng & nắm bắt kiến thức:**
+  - Nắm rõ cơ chế worker `initializer` (tránh pickle tokenizer mỗi task), giới hạn in-flight `deque` (Zero-OOM + bảo toàn thứ tự FIFO) và cách ghép `eos_id` giữa các lô.
+  - Chạy `pytest -v` toàn bộ repo (23 passed).
