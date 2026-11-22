@@ -7,11 +7,14 @@ from pathlib import Path
 
 from src.data.bpe import CustomBPE
 from src.data.clean import clean_and_dedup_stream
+from src.data.pack import build_bins
 from src.data.split import iter_jsonl_texts, split_by_document, write_splits_streaming
 from src.data.tokenizer_base import compute_file_sha256
 from src.data.vocab_eval import (
+    analyze_token_usage,
     compute_corpus_text_totals,
     embedding_param_cost,
+    inspect_tokenizer_vocab,
     run_vocab_benchmark,
 )
 
@@ -84,3 +87,49 @@ def test_vocab_benchmark_end_to_end_on_fixtures(tmp_path: Path) -> None:
     assert "custom_regex_bpe" in md_text
     assert "hf_tokenizers_byte_bpe" in md_text
     assert "Embedding Params" in md_text
+
+
+def test_inspect_tokenizer_vocab_and_analyze_token_usage(tmp_path: Path) -> None:
+    fixture_path = Path("fixtures/sample_vi_wiki.jsonl")
+    cleaned = list(clean_and_dedup_stream(iter_jsonl_texts(fixture_path)))
+    splits = split_by_document(cleaned, ratios=(0.90, 0.05, 0.05), seed=42)
+
+    bpe = CustomBPE()
+    bpe.train(splits["train"], vocab_size=512)
+
+    vocab_report = inspect_tokenizer_vocab(bpe, sample_limit=20)
+    assert vocab_report["vocab_size"] == 512
+    assert vocab_report["n_learned_tokens"] == 512 - 257
+    assert vocab_report["avg_learned_byte_length"] >= 2.0
+    assert 0.0 < vocab_report["letter_token_ratio"] <= 1.0
+    assert sum(vocab_report["category_counts"].values()) == vocab_report["n_learned_tokens"]
+    assert len(vocab_report["first_learned_tokens"]) == 20
+    assert len(vocab_report["longest_letter_tokens"]) > 0
+
+    out_dir = tmp_path / "v1_bpe512"
+    meta = build_bins(
+        splits=splits,
+        tokenizer=bpe,
+        output_dir=out_dir,
+        version="v1_bpe512",
+        tokenizer_type="custom_regex_bpe",
+        seed=42,
+        workers=1,
+    )
+
+    usage_train = analyze_token_usage(out_dir / "train.bin", vocab_size=512, tokenizer=bpe, top_k=10)
+    assert usage_train["total_tokens"] == meta["splits"]["train"]["n_tokens"]
+    assert usage_train["vocab_size"] == 512
+    assert 0 <= usage_train["dead_token_count"] < 512
+    assert 0 <= usage_train["learned_dead_token_count"] < (512 - 257)
+    assert len(usage_train["top_tokens"]) == 10
+    assert sum(t["count"] for t in usage_train["top_tokens"]) <= usage_train["total_tokens"]
+    assert all("text" in t for t in usage_train["top_tokens"])
+
+    # Empty bin returns graceful zero stats
+    empty_bin = tmp_path / "empty.bin"
+    empty_bin.write_bytes(b"")
+    usage_empty = analyze_token_usage(empty_bin, vocab_size=512)
+    assert usage_empty["total_tokens"] == 0
+    assert usage_empty["dead_token_count"] == 512
+    assert usage_empty["dead_token_ratio"] == 1.0

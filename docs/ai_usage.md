@@ -49,3 +49,13 @@
 - **Kiểm chứng & nắm bắt kiến thức:**
   - Nắm rõ cơ chế worker `initializer` (tránh pickle tokenizer mỗi task), giới hạn in-flight `deque` (Zero-OOM + bảo toàn thứ tự FIFO) và cách ghép `eos_id` giữa các lô.
   - Chạy `pytest -v` toàn bộ repo (23 passed).
+
+### Gói 5 (Phần 2): Kiểm định chất lượng Vocab, Notebook `01_corpus_tokenizer.ipynb` & Tài liệu bàn giao (`22/11/2026`)
+- **Công cụ sử dụng:** Trợ lý AI lập trình (Antigravity).
+- **Mục đích:**
+  - Bổ sung `inspect_tokenizer_vocab` và `analyze_token_usage` vào `src/data/vocab_eval.py` (kiểm tra thành phần từ vựng ghép, độ dài byte trung bình, phát hiện dead token qua `np.bincount` trên `.bin`, top token tần suất cao).
+  - Xây dựng `notebooks/01_corpus_tokenizer.ipynb` hỗ trợ 2 chế độ `"fixtures"` và `"colab"`, trình bày đủ 6 phần (thống kê corpus, round-trip, benchmark `4096/8192/16384` vs `tokenizers`, chi phí embedding weight tying, kiểm định vocab/dead token, kiểm tra `meta.json` & giải mã `test.bin`).
+  - Cập nhật `README.md` (hướng dẫn tái lập dữ liệu, hợp đồng giao diện và bảng link tải `v0_byte`, `v1_bpe8192`) và bổ sung unit test trong `tests/test_vocab_benchmark.py`.
+- **Kiểm chứng & nắm bắt kiến thức:**
+  - Chạy thực thi toàn bộ code cell của `notebooks/01_corpus_tokenizer.ipynb` ở chế độ `"fixtures"` không lỗi.
+  - Chạy `pytest -v` toàn bộ repo (24 passed).

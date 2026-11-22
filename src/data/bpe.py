@@ -86,6 +86,11 @@ class CustomBPE(BaseTokenizer):
         """Return learned merges as `(left_id, right_id, merged_id)` triples."""
         return list(self._merges)
 
+    @property
+    def vocab_bytes(self) -> dict[int, bytes]:
+        """Return a shallow copy of the token-ID-to-bytes mapping."""
+        return dict(self._vocab_bytes)
+
     def _reset_learned_state(self) -> None:
         self._vocab_bytes = {i: bytes([i]) for i in range(256)}
         self._merges = []
