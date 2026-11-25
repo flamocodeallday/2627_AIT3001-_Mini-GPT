@@ -85,7 +85,7 @@ def train_lstm(args):
                 split="val",
                 ctx=args.ctx,
                 max_tokens=args.eval_max_tokens,
-                save_dir="results",
+                save_dir=log_dir,
             )
             writer.add_scalar("val/loss", val_metrics.avg_nll, step)
             writer.add_scalar("val/perplexity", val_metrics.perplexity, step)

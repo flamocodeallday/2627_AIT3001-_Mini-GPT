@@ -5,11 +5,50 @@
     "hidden_dim": 64,
     "total_params": 557440,
     "non_embedding_params": 33152,
-    "tokens_seen": 1228800,
-    "approx_flops": 244423065600,
-    "val_loss": 5.70929,
-    "val_ppl": 301.6568,
-    "val_bpc": 2.394305,
-    "train_time_sec": 64.3
+    "tokens_seen": 8192000,
+    "approx_flops": 1629487104000,
+    "val_loss": 5.011362,
+    "val_ppl": 150.1091,
+    "val_bpc": 2.101636,
+    "train_time_sec": 187.0
+  },
+  {
+    "name": "scale_s",
+    "num_layers": 2,
+    "hidden_dim": 128,
+    "total_params": 1312000,
+    "non_embedding_params": 263424,
+    "tokens_seen": 8192000,
+    "approx_flops": 12947816448000,
+    "val_loss": 5.035764,
+    "val_ppl": 153.817,
+    "val_bpc": 2.111869,
+    "train_time_sec": 383.5
+  },
+  {
+    "name": "scale_m",
+    "num_layers": 2,
+    "hidden_dim": 256,
+    "total_params": 3148288,
+    "non_embedding_params": 1051136,
+    "tokens_seen": 8192000,
+    "approx_flops": 51665436672000,
+    "val_loss": 4.880538,
+    "val_ppl": 131.7015,
+    "val_bpc": 2.046772,
+    "train_time_sec": 383.8
+  },
+  {
+    "name": "scale_l",
+    "num_layers": 3,
+    "hidden_dim": 384,
+    "total_params": 6690048,
+    "non_embedding_params": 3544320,
+    "tokens_seen": 8192000,
+    "approx_flops": 174210416640000,
+    "val_loss": 5.187599,
+    "val_ppl": 179.0382,
+    "val_bpc": 2.175545,
+    "train_time_sec": 589.7
   }
 ]

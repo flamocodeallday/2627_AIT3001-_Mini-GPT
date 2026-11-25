@@ -1,4 +1,4 @@
 Model,Data,Split,Tag,Total Params,Non-Emb Params,Avg NLL (nats),Perplexity,BPC
 ngram_kn_n3,v1_bpe8192,val,official,"1,582,635","1,582,635",4.8796,131.57,2.0464
 ngram_kn_n4,v1_bpe8192,val,official,"3,223,062","3,223,062",4.8508,127.85,2.0343
-lstm_l2_h256,v1_bpe8192,val,official,"3,148,288","1,051,136",4.9893,146.83,2.0924
+lstm_l2_h256,v1_bpe8192,val,official,"3,148,288","1,051,136",4.3953,81.07,1.8433

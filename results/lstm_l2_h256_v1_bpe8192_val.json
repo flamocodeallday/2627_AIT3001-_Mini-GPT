@@ -4,16 +4,16 @@
   "split": "val",
   "tag": "official",
   "ctx": 256,
-  "total_nll": 1095746.3685,
+  "total_nll": 879062.9701,
   "num_tokens": 199999,
   "n_chars": 688017,
-  "avg_nll": 5.478759,
-  "perplexity": 239.5493,
-  "bpc": 2.297658,
+  "avg_nll": 4.395337,
+  "perplexity": 81.0719,
+  "bpc": 1.843297,
   "params": {
     "total_params": 3148288,
     "non_embedding_params": 1051136
   },
-  "timestamp": "2026-11-25T01:26:47",
-  "git_commit": "unknown"
+  "timestamp": "2026-11-25T02:42:24",
+  "git_commit": "0951042"
 }
