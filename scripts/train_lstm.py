@@ -55,6 +55,9 @@ def train_lstm(args):
     min_lr = args.lr * args.min_lr_ratio
     warmup_steps = max(1, int(args.warmup_ratio * args.max_steps))
 
+    use_amp = bool(args.amp and model.device.type == "cuda")
+    scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
+
     train_config = {
         "model_name": model.name,
         "preset": args.preset,
@@ -68,6 +71,7 @@ def train_lstm(args):
         "min_lr": min_lr,
         "warmup_steps": warmup_steps,
         "max_steps": args.max_steps,
+        "amp": use_amp,
         "seed": args.seed,
     }
     model.train_config = train_config
@@ -113,12 +117,16 @@ def train_lstm(args):
         accum_loss = 0.0
         for _ in range(args.grad_accum):
             xb, yb = get_batch(train_data, args.batch_size, args.ctx, model.device)
-            _, loss, _ = model(xb, yb)
-            (loss / args.grad_accum).backward()
+            with torch.amp.autocast("cuda", dtype=torch.float16, enabled=use_amp):
+                _, loss, _ = model(xb, yb)
+                scaled_loss = loss / args.grad_accum
+            scaler.scale(scaled_loss).backward()
             accum_loss += float(loss.item()) / args.grad_accum
 
+        scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        optimizer.step()
+        scaler.step(optimizer)
+        scaler.update()
 
         tokens_seen = step * tokens_per_step
         model.train_tokens = tokens_seen
@@ -191,6 +199,7 @@ if __name__ == "__main__":
     parser.add_argument("--eval_interval", type=int, default=500)
     parser.add_argument("--eval_max_tokens", type=int, default=None)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--amp", action="store_true", help="Bật FP16 Mixed Precision trên CUDA")
     parser.add_argument("--resume", type=str, default=None, help="Đường dẫn checkpoint để train tiếp")
     args = parser.parse_args()
 
