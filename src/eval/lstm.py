@@ -152,7 +152,7 @@ class LSTMLM(nn.Module, BaseLanguageModel):
         return logits, loss, states
 
     @torch.no_grad()
-    def nll(self, token_ids: np.ndarray, ctx: int = 256, batch_size: int = 64) -> Tuple[float, int]:
+    def nll(self, token_ids: np.ndarray, ctx: int = 512, batch_size: int = 64) -> Tuple[float, int]:
         """
         Tính tổng Negative Log-Likelihood (nats) trên chuỗi token_ids theo từng đoạn dài `ctx`.
         """
@@ -257,8 +257,16 @@ class LSTMLM(nn.Module, BaseLanguageModel):
 
         return generated
 
-    def save_checkpoint(self, path: str, tokenizer_meta: Dict, step: int, val_loss: float):
-        """Lưu checkpoint theo đúng Hợp đồng giao diện v0 của nhóm."""
+    def save_checkpoint(
+        self,
+        path: str,
+        tokenizer_meta: Dict,
+        step: int,
+        val_loss: float,
+        train_tokens: Optional[int] = None,
+        train_config: Optional[Dict] = None,
+    ):
+        """Lưu checkpoint theo đúng Hợp đồng giao diện v0 của nhóm, kèm metadata huấn luyện."""
         torch.save(
             {
                 "state_dict": self.state_dict(),
@@ -266,15 +274,19 @@ class LSTMLM(nn.Module, BaseLanguageModel):
                 "tokenizer_meta": tokenizer_meta,
                 "step": step,
                 "val_loss": val_loss,
+                "train_tokens": train_tokens if train_tokens is not None else self.train_tokens,
+                "train_config": train_config if train_config is not None else self.train_config,
             },
             path,
         )
 
     @classmethod
-    def from_checkpoint(cls, path: str, device: Optional[str] = None) -> "LSTMLM":
+    def from_checkpoint(cls, path: str, device: Optional[str] = None, name: Optional[str] = None) -> "LSTMLM":
         ckpt = torch.load(path, map_location=device or "cpu", weights_only=False)
         cfg = LSTMConfig(**ckpt["config"])
         tok_hash = ckpt.get("tokenizer_meta", {}).get("tokenizer_hash")
-        model = cls(config=cfg, tokenizer_hash=tok_hash, device=device)
+        model = cls(config=cfg, tokenizer_hash=tok_hash, name=name, device=device)
         model.load_state_dict(ckpt["state_dict"])
+        model.train_tokens = ckpt.get("train_tokens")
+        model.train_config = ckpt.get("train_config") or {}
         return model

@@ -46,24 +46,47 @@ class NGramLM(BaseLanguageModel):
         self.continuation_context_totals: Dict[int, Counter] = {
             k: Counter() for k in range(2, order)
         }
+        # continuation_unique_next[k][prefix] = số loại token w có c_cont(prefix, w) > 0
+        self.continuation_unique_next: Dict[int, Counter] = {
+            k: Counter() for k in range(2, order)
+        }
         self.total_bigram_types: int = 0
         self.total_unigram_tokens: int = 0
         self.is_fitted: bool = False
 
     def fit(self, train_tokens: np.ndarray, max_train_tokens: Optional[int] = None) -> "NGramLM":
-        """Huấn luyện đếm tần suất n-gram từ mảng token_ids (uint16)."""
+        """Huấn luyện đếm tần suất n-gram từ mảng token_ids (uint16), tối ưu bằng NumPy cho k <= 4."""
         tokens = train_tokens[:max_train_tokens] if max_train_tokens else train_tokens
-        tokens_list = tokens.tolist()
-        n_tok = len(tokens_list)
+        tokens_arr = np.asarray(tokens, dtype=np.uint64)
+        n_tok = len(tokens_arr)
         if n_tok < self.order:
             raise ValueError("Chuỗi huấn luyện ngắn hơn bậc n-gram!")
 
+        self.train_tokens = int(n_tok)
+        self.train_config = {
+            "order": self.order,
+            "discount": self.discount,
+            "max_train_tokens": int(max_train_tokens) if max_train_tokens is not None else None,
+        }
+
         # 1. Đếm tần suất cho tất cả các bậc 1 .. order
+        # Dùng bit-packing uint64 + np.unique cho k <= 4 (mỗi token <= 65535 chiếm 16 bit)
         for k in range(1, self.order + 1):
             counts_k = self.ngram_counts[k]
-            for i in range(n_tok - k + 1):
-                ng = tuple(tokens_list[i : i + k])
-                counts_k[ng] += 1
+            if k <= 4 and self.vocab_size <= 65536:
+                packed = tokens_arr[: n_tok - k + 1].copy()
+                for offset in range(1, k):
+                    packed = (packed << np.uint64(16)) | tokens_arr[offset : n_tok - k + 1 + offset]
+                uniq_keys, uniq_cnts = np.unique(packed, return_counts=True)
+                shifts = [16 * (k - 1 - j) for j in range(k)]
+                for key_val, cnt_val in zip(uniq_keys.tolist(), uniq_cnts.tolist()):
+                    ng = tuple((key_val >> s) & 0xFFFF for s in shifts)
+                    counts_k[ng] += cnt_val
+            else:
+                tokens_list = tokens_arr.tolist()
+                for i in range(n_tok - k + 1):
+                    ng = tuple(tokens_list[i : i + k])
+                    counts_k[ng] += 1
 
         self.total_unigram_tokens = sum(self.ngram_counts[1].values())
 
@@ -82,9 +105,13 @@ class NGramLM(BaseLanguageModel):
                 self.unique_preceding[k - 1][suffix].add(prev_tok)
 
         for k in range(2, self.order):
+            cont_tot = self.continuation_context_totals[k]
+            cont_uniq = self.continuation_unique_next[k]
             for suffix, prev_set in self.unique_preceding[k].items():
-                prefix = suffix[:-1]
-                self.continuation_context_totals[k][prefix] += len(prev_set)
+                if prev_set:
+                    prefix = suffix[:-1]
+                    cont_tot[prefix] += len(prev_set)
+                    cont_uniq[prefix] += 1
 
         if self.order >= 2:
             self.total_bigram_types = len(self.ngram_counts[2])
@@ -102,7 +129,7 @@ class NGramLM(BaseLanguageModel):
                 return (cnt + 1.0) / (self.total_unigram_tokens + self.vocab_size)
             else:
                 # P_continuation(w) = |{w_{i-1} : c(w_{i-1}, w) > 0}| / |{(w_{j-1}, w_j) : c > 0}|
-                # Trộn với phân phối đều nhỏ (1e-5) để bảo đảm mọi token OOV đều có P > 0
+                # Trộn với phân phối đều nhỏ (1e-4) để bảo đảm mọi token OOV đều có P > 0
                 cont_cnt = len(self.unique_preceding[1].get((word,), ()))
                 p_cont = cont_cnt / max(self.total_bigram_types, 1)
                 return (1.0 - 1e-4) * p_cont + 1e-4 * (1.0 / self.vocab_size)
@@ -118,7 +145,7 @@ class NGramLM(BaseLanguageModel):
             # Với các bậc trung gian (1 < level < order), Kneser-Ney dùng continuation counts
             c_ngram = len(self.unique_preceding[level].get(ngram, ()))
             c_prefix = self.continuation_context_totals[level].get(prefix, 0)
-            n_unique_next = self.context_unique_next[level].get(prefix, 0)
+            n_unique_next = self.continuation_unique_next[level].get(prefix, 0)
 
         lower_prob = self._kn_prob(history, word, level - 1, is_highest=False)
 

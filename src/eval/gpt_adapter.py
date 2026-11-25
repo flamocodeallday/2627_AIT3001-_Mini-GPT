@@ -29,7 +29,7 @@ class GPTAdapter(BaseLanguageModel):
         self.model.to(self.device)
 
     @torch.no_grad()
-    def nll(self, token_ids: np.ndarray, ctx: int = 256, batch_size: int = 32) -> Tuple[float, int]:
+    def nll(self, token_ids: np.ndarray, ctx: int = 512, batch_size: int = 32) -> Tuple[float, int]:
         """Tính tổng Negative Log-Likelihood (nats) trên chuỗi token_ids."""
         self.model.eval()
         n = len(token_ids)
@@ -112,10 +112,13 @@ class GPTAdapter(BaseLanguageModel):
 
         gpt_model = model_builder(cfg)
         gpt_model.load_state_dict(ckpt["state_dict"])
-        return cls(
+        adapter = cls(
             gpt_model=gpt_model,
             vocab_size=vocab_size,
             tokenizer_hash=tok_hash,
             name=name,
             device=device,
         )
+        adapter.train_tokens = ckpt.get("train_tokens")
+        adapter.train_config = ckpt.get("train_config") or {}
+        return adapter
