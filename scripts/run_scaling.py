@@ -3,29 +3,62 @@ import json
 import math
 import time
 import argparse
+from typing import List, Dict, Any
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
-from src.eval.base import DatasetBundle, evaluate_model
+from src.eval.base import DatasetBundle, evaluate_model, _get_git_info, _get_hardware_info
 from src.eval.lstm import LSTMLM, LSTMConfig
+from src.eval.gpt_adapter import GPTAdapter
 from scripts.train_lstm import get_batch
 
 
-# 4 cấu hình tăng dần kích thước để khảo sát Model Scaling Laws
-SCALING_PRESETS = [
-    {"name": "scale_xs", "num_layers": 1, "hidden_dim": 64},
-    {"name": "scale_s",  "num_layers": 2, "hidden_dim": 128},
-    {"name": "scale_m",  "num_layers": 2, "hidden_dim": 256},
-    {"name": "scale_l",  "num_layers": 3, "hidden_dim": 384},
+# Đường so sánh phụ: Scaling trên LSTM (giữ lại để đối chiếu, ghi nhãn rõ)
+LSTM_SCALING_PRESETS = [
+    {"name": "lstm_xs", "num_layers": 1, "hidden_dim": 64},
+    {"name": "lstm_s", "num_layers": 2, "hidden_dim": 128},
+    {"name": "lstm_m", "num_layers": 2, "hidden_dim": 256},
+    {"name": "lstm_l", "num_layers": 3, "hidden_dim": 384},
 ]
 
 
-def plot_scaling_curve(records: list, out_png: str):
+def _load_gpt_presets_and_cls(preset_names: List[str], vocab_size: int, ctx: int):
+    """Đọc PRESETS và GPTConfig từ src.model.config của Thành viên 2."""
+    try:
+        from src.model.config import PRESETS, GPTConfig  # type: ignore
+        import src.model as model_pkg  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError(
+            "Không thể import src.model.config (PRESETS, GPTConfig) của TV2. "
+            "Hãy merge nhánh TV2 trước khi chạy --arch gpt, hoặc dùng --arch lstm để chạy đường phụ."
+        ) from exc
+
+    gpt_cls = getattr(model_pkg, "MiniGPT", None) or getattr(model_pkg, "GPT", None)
+    if gpt_cls is None:
+        from src.model.gpt import GPT as gpt_cls  # type: ignore
+
+    selected = preset_names if preset_names else list(PRESETS.keys())
+    configs = []
+    for name in selected:
+        if name not in PRESETS:
+            raise ValueError(f"Preset '{name}' không có trong src.model.config.PRESETS: {list(PRESETS.keys())}")
+        raw = PRESETS[name]
+        if isinstance(raw, GPTConfig):
+            cfg_dict = dict(raw.__dict__)
+        else:
+            cfg_dict = dict(raw)
+        cfg_dict["vocab_size"] = vocab_size
+        if "block_size" in cfg_dict:
+            cfg_dict["block_size"] = ctx
+        configs.append((name, GPTConfig(**cfg_dict)))
+    return configs, gpt_cls
+
+
+def plot_scaling_curve(records: list, out_png: str, arch: str):
     """Vẽ đồ thị Model Scaling trên thang log-log và fit đường Power-Law (Kaplan et al., 2020)."""
     non_emb = np.array([r["non_embedding_params"] for r in records], dtype=np.float64)
     val_loss = np.array([r["val_loss"] for r in records], dtype=np.float64)
 
-    # Fit tuyến tính trong không gian log10: log10(L) = -alpha * log10(N) + c
     log_n = np.log10(non_emb)
     log_l = np.log10(val_loss)
     slope, intercept = np.polyfit(log_n, log_l, 1)
@@ -55,15 +88,125 @@ def plot_scaling_curve(records: list, out_png: str):
             fontsize=9,
         )
 
-    plt.xlabel("Non-Embedding Parameters ($N$)", fontsize=11)
+    title_suffix = "GPT (Chính)" if arch == "gpt" else "LSTM (Đường so sánh phụ)"
+    plt.xlabel("Non-Embedding Parameters ($N_{\\text{non-emb}}$)", fontsize=11)
     plt.ylabel("Validation Cross-Entropy Loss (nats)", fontsize=11)
-    plt.title("Model Scaling Law (Log-Log Scale)", fontsize=12, fontweight="bold")
+    plt.title(f"Model Scaling Law — {title_suffix}", fontsize=12, fontweight="bold")
     plt.grid(True, which="both", linestyle=":", alpha=0.6)
     plt.legend(frameon=True)
     plt.tight_layout()
     plt.savefig(out_png)
     plt.close()
     print(f"Đã lưu biểu đồ Scaling Law tại: {out_png} (alpha_N = {alpha:.4f})")
+
+
+def _train_one_run(
+    model_nn: torch.nn.Module,
+    eval_wrapper,
+    name: str,
+    ds: DatasetBundle,
+    train_data: np.ndarray,
+    args,
+    is_gpt: bool,
+) -> Dict[str, Any]:
+    params = eval_wrapper.count_params()
+    n_non_emb = params["non_embedding_params"]
+
+    # Luật ngân sách đã chốt (Quyết định C): D = token_multiplier * N_non_emb (mặc định 20x)
+    target_tokens = int(args.token_multiplier * n_non_emb)
+    tokens_per_step = args.batch_size * args.grad_accum * args.ctx
+    if args.max_steps_override is not None:
+        total_steps = args.max_steps_override
+    else:
+        total_steps = max(1, math.ceil(target_tokens / tokens_per_step))
+
+    warmup_steps = max(1, int(args.warmup_ratio * total_steps))
+    min_lr = args.lr * args.min_lr_ratio
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model_nn.to(device)
+
+    optimizer = torch.optim.AdamW(model_nn.parameters(), lr=args.lr, weight_decay=0.01)
+
+    t0 = time.time()
+    model_nn.train()
+    for step in range(1, total_steps + 1):
+        if step < warmup_steps:
+            lr = args.lr * (step / warmup_steps)
+        else:
+            progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+            lr = min_lr + (args.lr - min_lr) * 0.5 * (1.0 + math.cos(math.pi * progress))
+        for pg in optimizer.param_groups:
+            pg["lr"] = lr
+
+        optimizer.zero_grad(set_to_none=True)
+        for _ in range(args.grad_accum):
+            xb, yb = get_batch(train_data, args.batch_size, args.ctx, device)
+            if is_gpt:
+                _, loss = model_nn(xb, targets=yb)
+            else:
+                _, loss, _ = model_nn(xb, yb)
+            (loss / args.grad_accum).backward()
+
+        torch.nn.utils.clip_grad_norm_(model_nn.parameters(), 1.0)
+        optimizer.step()
+
+    train_time_sec = round(time.time() - t0, 1)
+    tokens_seen = total_steps * tokens_per_step
+    approx_flops = 6 * n_non_emb * tokens_seen
+    git_commit, git_dirty = _get_git_info()
+
+    train_config = {
+        "arch": args.arch,
+        "preset": name,
+        "ctx": args.ctx,
+        "batch_size": args.batch_size,
+        "grad_accum": args.grad_accum,
+        "lr": args.lr,
+        "min_lr": min_lr,
+        "warmup_steps": warmup_steps,
+        "total_steps": total_steps,
+        "token_multiplier": args.token_multiplier,
+        "seed": args.seed,
+    }
+
+    metrics = evaluate_model(
+        eval_wrapper,
+        ds,
+        split="val",
+        ctx=args.ctx,
+        max_tokens=args.eval_max_tokens,
+        save_dir=None,
+        train_tokens=tokens_seen,
+        train_config=train_config,
+    )
+
+    rec = {
+        "arch": args.arch,
+        "name": name,
+        "total_params": params["total_params"],
+        "non_embedding_params": n_non_emb,
+        "target_tokens": target_tokens,
+        "tokens_seen": tokens_seen,
+        "tokens_per_non_emb_param": round(tokens_seen / max(1, n_non_emb), 2),
+        "approx_flops": approx_flops,
+        "val_loss": metrics.avg_nll,
+        "val_ppl": metrics.perplexity,
+        "val_bpc": metrics.bpc,
+        "eval_tokens": metrics.num_tokens,
+        "is_full_split": metrics.is_full_split,
+        "tag": metrics.tag,
+        "train_config": train_config,
+        "hardware": _get_hardware_info(),
+        "git_commit": git_commit,
+        "git_dirty": git_dirty,
+        "train_time_sec": train_time_sec,
+    }
+    print(
+        f"[{args.arch.upper()} | {name:<10}] N_non_emb={n_non_emb:>10,} | "
+        f"D={tokens_seen:>11,} ({rec['tokens_per_non_emb_param']:.1f}x) | "
+        f"Val Loss={rec['val_loss']:.4f} | PPL={rec['val_ppl']:.2f} | Time={train_time_sec}s"
+    )
+    return rec
 
 
 def run_scaling_experiment(args):
@@ -74,81 +217,68 @@ def run_scaling_experiment(args):
     train_data = ds.get_split_tokens("train")
     records = []
 
-    for preset in SCALING_PRESETS:
-        cfg = LSTMConfig(
-            vocab_size=ds.vocab_size,
-            embed_dim=preset["hidden_dim"],
-            hidden_dim=preset["hidden_dim"],
-            num_layers=preset["num_layers"],
-            dropout=0.1,
-            tie_weights=True,
-        )
-        model = LSTMLM(cfg, tokenizer_hash=ds.tokenizer_hash, name=preset["name"])
-        params = model.count_params()
-        optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
+    if args.arch == "gpt":
+        configs, gpt_cls = _load_gpt_presets_and_cls(args.presets, ds.vocab_size, args.ctx)
+        for name, cfg in configs:
+            gpt_model = gpt_cls(cfg)
+            adapter = GPTAdapter(
+                gpt_model=gpt_model,
+                vocab_size=ds.vocab_size,
+                tokenizer_hash=ds.tokenizer_hash,
+                name=name,
+            )
+            rec = _train_one_run(gpt_model, adapter, name, ds, train_data, args, is_gpt=True)
+            records.append(rec)
+    else:
+        for preset in LSTM_SCALING_PRESETS:
+            if args.presets and preset["name"] not in args.presets:
+                continue
+            cfg = LSTMConfig(
+                vocab_size=ds.vocab_size,
+                embed_dim=preset["hidden_dim"],
+                hidden_dim=preset["hidden_dim"],
+                num_layers=preset["num_layers"],
+                dropout=0.1,
+                tie_weights=True,
+            )
+            model = LSTMLM(cfg, tokenizer_hash=ds.tokenizer_hash, name=preset["name"])
+            rec = _train_one_run(model, model, preset["name"], ds, train_data, args, is_gpt=False)
+            records.append(rec)
 
-        t0 = time.time()
-        model.train()
-        warmup_steps = max(1, int(0.05 * args.steps_per_model))
-        for step in range(1, args.steps_per_model + 1):
-            if step < warmup_steps:
-                lr = args.lr * (step / warmup_steps)
-            else:
-                progress = (step - warmup_steps) / max(1, args.steps_per_model - warmup_steps)
-                lr = args.lr * 0.1 + 0.9 * args.lr * 0.5 * (1.0 + math.cos(math.pi * progress))
-            for pg in optimizer.param_groups:
-                pg["lr"] = lr
-
-            xb, yb = get_batch(train_data, args.batch_size, args.ctx, model.device)
-            _, loss, _ = model(xb, yb)
-            optimizer.zero_grad(set_to_none=True)
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
-
-        metrics = evaluate_model(
-            model, ds, split="val", ctx=args.ctx, max_tokens=args.eval_max_tokens, save_dir=None
-        )
-        tokens_seen = args.steps_per_model * args.batch_size * args.ctx
-        approx_flops = 6 * params["non_embedding_params"] * tokens_seen
-
-        rec = {
-            "name": preset["name"],
-            "num_layers": preset["num_layers"],
-            "hidden_dim": preset["hidden_dim"],
-            "total_params": params["total_params"],
-            "non_embedding_params": params["non_embedding_params"],
-            "tokens_seen": tokens_seen,
-            "approx_flops": approx_flops,
-            "val_loss": metrics.avg_nll,
-            "val_ppl": metrics.perplexity,
-            "val_bpc": metrics.bpc,
-            "train_time_sec": round(time.time() - t0, 1),
-        }
-        records.append(rec)
-        print(
-            f"[{rec['name']:<8}] N_non_emb={rec['non_embedding_params']:>8,} | "
-            f"Val Loss={rec['val_loss']:.4f} | PPL={rec['val_ppl']:.2f} | "
-            f"Time={rec['train_time_sec']}s"
-        )
-
-    os.makedirs("results", exist_ok=True)
-    json_path = f"results/scaling_{ds.version}.json"
+    os.makedirs(args.save_dir, exist_ok=True)
+    json_path = os.path.join(args.save_dir, f"scaling_{args.arch}_{ds.version}.json")
     with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(records, f, indent=2)
+        json.dump(records, f, ensure_ascii=False, indent=2)
 
-    plot_scaling_curve(records, f"results/scaling_law_{ds.version}.png")
+    if len(records) >= 2:
+        plot_scaling_curve(
+            records,
+            os.path.join(args.save_dir, f"scaling_law_{args.arch}_{ds.version}.png"),
+            arch=args.arch,
+        )
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Chạy thí nghiệm Model Scaling Laws")
-    parser.add_argument("--data_dir", type=str, default="data/processed/v0_byte")
-    parser.add_argument("--steps_per_model", type=int, default=300)
-    parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--ctx", type=int, default=128)
-    parser.add_argument("--lr", type=float, default=3e-3)
-    parser.add_argument("--eval_max_tokens", type=int, default=50000)
+    parser = argparse.ArgumentParser(description="Chạy thí nghiệm Model Scaling Laws (GPT chính / LSTM phụ)")
+    parser.add_argument("--arch", type=str, choices=["gpt", "lstm"], default="gpt")
+    parser.add_argument("--data_dir", type=str, default="data/processed/v1_bpe8192")
+    parser.add_argument("--presets", type=str, nargs="*", default=[], help="Danh sách preset cần chạy")
+    parser.add_argument("--ctx", type=int, default=512)
+    parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--grad_accum", type=int, default=1)
+    parser.add_argument("--lr", type=float, default=6e-4)
+    parser.add_argument("--min_lr_ratio", type=float, default=0.1)
+    parser.add_argument("--warmup_ratio", type=float, default=0.05)
+    parser.add_argument(
+        "--token_multiplier",
+        type=float,
+        default=20.0,
+        help="Luật ngân sách D = token_multiplier * N_non_emb (mặc định 20 theo Quyết định C)",
+    )
+    parser.add_argument("--max_steps_override", type=int, default=None, help="Chỉ dùng để debug nhanh")
+    parser.add_argument("--eval_max_tokens", type=int, default=None, help="Mặc định None = toàn bộ val")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--save_dir", type=str, default="results")
     args = parser.parse_args()
 
     run_scaling_experiment(args)

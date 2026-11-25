@@ -8,6 +8,11 @@ from torch.utils.tensorboard import SummaryWriter
 from src.eval.base import DatasetBundle, evaluate_model
 from src.eval.lstm import LSTMLM, LSTMConfig
 
+LSTM_PRESETS = {
+    "small": {"num_layers": 2, "hidden_dim": 256},      # ~1.05M non-emb
+    "large": {"num_layers": 3, "hidden_dim": 1024},     # ~25.2M non-emb (cùng cỡ GPT chính ~30M)
+}
+
 
 def get_batch(data: np.ndarray, batch_size: int, ctx: int, device: torch.device):
     ix = torch.randint(len(data) - ctx - 1, (batch_size,))
@@ -20,8 +25,17 @@ def train_lstm(args):
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
+    if args.preset is not None:
+        preset_cfg = LSTM_PRESETS[args.preset]
+        args.num_layers = preset_cfg["num_layers"]
+        args.hidden_dim = preset_cfg["hidden_dim"]
+
     ds = DatasetBundle(args.data_dir)
     train_data = ds.get_split_tokens("train")
+
+    tokens_per_step = args.batch_size * args.grad_accum * args.ctx
+    if args.max_tokens is not None:
+        args.max_steps = max(1, math.ceil(args.max_tokens / tokens_per_step))
 
     cfg = LSTMConfig(
         vocab_size=ds.vocab_size,
@@ -31,13 +45,37 @@ def train_lstm(args):
         dropout=args.dropout,
         tie_weights=True,
     )
+    model_name = args.name or f"lstm_l{args.num_layers}_h{args.hidden_dim}"
     model = LSTMLM(
         config=cfg,
         tokenizer_hash=ds.tokenizer_hash,
-        name=f"lstm_l{args.num_layers}_h{args.hidden_dim}",
+        name=model_name,
     )
     params_info = model.count_params()
-    print(f"Khởi tạo {model.name} trên {model.device} | Params: {params_info}")
+    min_lr = args.lr * args.min_lr_ratio
+    warmup_steps = max(1, int(args.warmup_ratio * args.max_steps))
+
+    train_config = {
+        "model_name": model.name,
+        "preset": args.preset,
+        "num_layers": args.num_layers,
+        "hidden_dim": args.hidden_dim,
+        "dropout": args.dropout,
+        "ctx": args.ctx,
+        "batch_size": args.batch_size,
+        "grad_accum": args.grad_accum,
+        "lr": args.lr,
+        "min_lr": min_lr,
+        "warmup_steps": warmup_steps,
+        "max_steps": args.max_steps,
+        "seed": args.seed,
+    }
+    model.train_config = train_config
+
+    print(
+        f"Khởi tạo {model.name} trên {model.device} | Params: {params_info} | "
+        f"Steps: {args.max_steps} (~{args.max_steps * tokens_per_step:,} tokens)"
+    )
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
 
@@ -51,31 +89,34 @@ def train_lstm(args):
     t0 = time.time()
     for step in range(1, args.max_steps + 1):
         model.train()
-        # Cosine learning rate decay với warmup 5%
-        warmup_steps = max(1, int(0.05 * args.max_steps))
         if step < warmup_steps:
             lr = args.lr * (step / warmup_steps)
         else:
             progress = (step - warmup_steps) / max(1, args.max_steps - warmup_steps)
-            lr = args.lr * 0.1 + 0.9 * args.lr * 0.5 * (1.0 + math.cos(math.pi * progress))
+            lr = min_lr + (args.lr - min_lr) * 0.5 * (1.0 + math.cos(math.pi * progress))
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr
 
-        xb, yb = get_batch(train_data, args.batch_size, args.ctx, model.device)
-        _, loss, _ = model(xb, yb)
-
         optimizer.zero_grad(set_to_none=True)
-        loss.backward()
+        accum_loss = 0.0
+        for _ in range(args.grad_accum):
+            xb, yb = get_batch(train_data, args.batch_size, args.ctx, model.device)
+            _, loss, _ = model(xb, yb)
+            (loss / args.grad_accum).backward()
+            accum_loss += float(loss.item()) / args.grad_accum
+
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
 
-        if step % args.log_interval == 0:
-            writer.add_scalar("train/loss", loss.item(), step)
+        tokens_seen = step * tokens_per_step
+        model.train_tokens = tokens_seen
+
+        if step % args.log_interval == 0 or step == 1:
+            writer.add_scalar("train/loss", accum_loss, step)
             writer.add_scalar("train/lr", lr, step)
             print(
-                f"Step {step:4d}/{args.max_steps} | "
-                f"Train Loss: {loss.item():.4f} | LR: {lr:.2e} | "
-                f"Elapsed: {time.time() - t0:.1f}s"
+                f"Step {step:5d}/{args.max_steps} | Tokens: {tokens_seen:>11,} | "
+                f"Train Loss: {accum_loss:.4f} | LR: {lr:.2e} | Elapsed: {time.time() - t0:.1f}s"
             )
 
         if step % args.eval_interval == 0 or step == args.max_steps:
@@ -86,6 +127,8 @@ def train_lstm(args):
                 ctx=args.ctx,
                 max_tokens=args.eval_max_tokens,
                 save_dir=log_dir,
+                train_tokens=tokens_seen,
+                train_config=train_config,
             )
             writer.add_scalar("val/loss", val_metrics.avg_nll, step)
             writer.add_scalar("val/perplexity", val_metrics.perplexity, step)
@@ -107,6 +150,8 @@ def train_lstm(args):
                     },
                     step=step,
                     val_loss=best_val_loss,
+                    train_tokens=tokens_seen,
+                    train_config=train_config,
                 )
 
     writer.close()
@@ -115,17 +160,23 @@ def train_lstm(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Huấn luyện Baseline LSTMLM tự cài đặt")
-    parser.add_argument("--data_dir", type=str, default="data/processed/v0_byte")
+    parser.add_argument("--data_dir", type=str, default="data/processed/v1_bpe8192")
+    parser.add_argument("--preset", type=str, choices=list(LSTM_PRESETS.keys()), default=None)
+    parser.add_argument("--name", type=str, default=None)
     parser.add_argument("--hidden_dim", type=int, default=256)
     parser.add_argument("--num_layers", type=int, default=2)
     parser.add_argument("--dropout", type=float, default=0.2)
-    parser.add_argument("--ctx", type=int, default=128)
-    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--ctx", type=int, default=512)
+    parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--grad_accum", type=int, default=1)
     parser.add_argument("--lr", type=float, default=3e-3)
-    parser.add_argument("--max_steps", type=int, default=600)
+    parser.add_argument("--min_lr_ratio", type=float, default=0.1)
+    parser.add_argument("--warmup_ratio", type=float, default=0.05)
+    parser.add_argument("--max_steps", type=int, default=3000)
+    parser.add_argument("--max_tokens", type=int, default=None)
     parser.add_argument("--log_interval", type=int, default=50)
-    parser.add_argument("--eval_interval", type=int, default=200)
-    parser.add_argument("--eval_max_tokens", type=int, default=100000)
+    parser.add_argument("--eval_interval", type=int, default=500)
+    parser.add_argument("--eval_max_tokens", type=int, default=None)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
