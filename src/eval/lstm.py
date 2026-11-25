@@ -265,20 +265,21 @@ class LSTMLM(nn.Module, BaseLanguageModel):
         val_loss: float,
         train_tokens: Optional[int] = None,
         train_config: Optional[Dict] = None,
+        optimizer_state_dict: Optional[Dict] = None,
     ):
         """Lưu checkpoint theo đúng Hợp đồng giao diện v0 của nhóm, kèm metadata huấn luyện."""
-        torch.save(
-            {
-                "state_dict": self.state_dict(),
-                "config": asdict(self.config),
-                "tokenizer_meta": tokenizer_meta,
-                "step": step,
-                "val_loss": val_loss,
-                "train_tokens": train_tokens if train_tokens is not None else self.train_tokens,
-                "train_config": train_config if train_config is not None else self.train_config,
-            },
-            path,
-        )
+        payload = {
+            "state_dict": self.state_dict(),
+            "config": asdict(self.config),
+            "tokenizer_meta": tokenizer_meta,
+            "step": step,
+            "val_loss": val_loss,
+            "train_tokens": train_tokens if train_tokens is not None else self.train_tokens,
+            "train_config": train_config if train_config is not None else self.train_config,
+        }
+        if optimizer_state_dict is not None:
+            payload["optimizer_state_dict"] = optimizer_state_dict
+        torch.save(payload, path)
 
     @classmethod
     def from_checkpoint(cls, path: str, device: Optional[str] = None, name: Optional[str] = None) -> "LSTMLM":

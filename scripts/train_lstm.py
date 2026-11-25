@@ -84,10 +84,22 @@ def train_lstm(args):
     writer = SummaryWriter(log_dir=log_dir)
 
     best_val_loss = float("inf")
+    start_step = 1
     ckpt_path = os.path.join("results/checkpoints", f"{model.name}_{ds.version}_best.pt")
 
+    if args.resume:
+        if not os.path.exists(args.resume):
+            raise FileNotFoundError(f"Không tìm thấy checkpoint để resume tại: {args.resume}")
+        ckpt = torch.load(args.resume, map_location=model.device, weights_only=False)
+        model.load_state_dict(ckpt["state_dict"])
+        if "optimizer_state_dict" in ckpt:
+            optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        start_step = int(ckpt.get("step", 0)) + 1
+        best_val_loss = float(ckpt.get("val_loss", float("inf")))
+        print(f"Resume từ {args.resume} | Tiếp tục từ step {start_step}/{args.max_steps} (best_val_loss={best_val_loss:.4f})")
+
     t0 = time.time()
-    for step in range(1, args.max_steps + 1):
+    for step in range(start_step, args.max_steps + 1):
         model.train()
         if step < warmup_steps:
             lr = args.lr * (step / warmup_steps)
@@ -152,6 +164,7 @@ def train_lstm(args):
                     val_loss=best_val_loss,
                     train_tokens=tokens_seen,
                     train_config=train_config,
+                    optimizer_state_dict=optimizer.state_dict(),
                 )
 
     writer.close()
@@ -178,6 +191,7 @@ if __name__ == "__main__":
     parser.add_argument("--eval_interval", type=int, default=500)
     parser.add_argument("--eval_max_tokens", type=int, default=None)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--resume", type=str, default=None, help="Đường dẫn checkpoint để train tiếp")
     args = parser.parse_args()
 
     train_lstm(args)
