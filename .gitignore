@@ -30,3 +30,9 @@ logs/
 Thumbs.db
 .vscode/
 .idea/
+
+# Member 3 (eval): LSTM checkpoints, TensorBoard runs
+data/
+runs/
+results/checkpoints/
+*.pt

@@ -1,0 +1,39 @@
+{
+  "model_name": "lstm_l2_h256",
+  "data_version": "v1_bpe8192",
+  "split": "val",
+  "tag": "official",
+  "ctx": 512,
+  "is_full_split": true,
+  "total_nll": 11915815.6152,
+  "num_tokens": 2775100,
+  "n_chars": 9546585,
+  "avg_nll": 4.293833,
+  "perplexity": 73.2467,
+  "bpc": 1.800737,
+  "params": {
+    "total_params": 3148288,
+    "non_embedding_params": 1051136
+  },
+  "train_tokens": 24576000,
+  "train_config": {
+    "model_name": "lstm_l2_h256",
+    "preset": "small",
+    "num_layers": 2,
+    "hidden_dim": 256,
+    "dropout": 0.2,
+    "ctx": 512,
+    "batch_size": 16,
+    "grad_accum": 1,
+    "lr": 0.003,
+    "min_lr": 0.00030000000000000003,
+    "warmup_steps": 150,
+    "max_steps": 3000,
+    "seed": 42
+  },
+  "hardware": "cuda:NVIDIA L4",
+  "eval_time_sec": 20.6,
+  "timestamp": "2026-11-25T21:27:41",
+  "git_commit": "b6aa483",
+  "git_dirty": false
+}

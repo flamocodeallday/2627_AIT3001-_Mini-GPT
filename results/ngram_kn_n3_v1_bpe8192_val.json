@@ -1,0 +1,29 @@
+{
+  "model_name": "ngram_kn_n3",
+  "data_version": "v1_bpe8192",
+  "split": "val",
+  "tag": "official",
+  "ctx": 512,
+  "is_full_split": true,
+  "total_nll": 13560644.0395,
+  "num_tokens": 2775100,
+  "n_chars": 9546585,
+  "avg_nll": 4.886542,
+  "perplexity": 132.4947,
+  "bpc": 2.049306,
+  "params": {
+    "total_params": 5687280,
+    "non_embedding_params": 5687280
+  },
+  "train_tokens": 10000000,
+  "train_config": {
+    "order": 3,
+    "discount": 0.75,
+    "max_train_tokens": 10000000
+  },
+  "hardware": "cuda:NVIDIA L4",
+  "eval_time_sec": 11.22,
+  "timestamp": "2026-11-25T21:25:46",
+  "git_commit": "b6aa483",
+  "git_dirty": false
+}
