@@ -1,0 +1,31 @@
+# Shared settings for the GPT scaling ladder (decision C). One run per preset:
+#   python -m src.train.train --config configs/gpt/scaling.yaml --preset scale_1m
+# Presets (non-emb): scale_1m ~1.33M, scale_3m ~3.15M, scale_7m ~7.38M, scale_15m ~14.2M, main_30m ~25.2M
+# Budget per run: D = 20 x N_non_emb tokens; warmup then cosine to min_lr at the end of EACH run.
+# Same train settings as configs/gpt/main_30m.yaml (the top of the ladder).
+# Every run keeps the same data, tokenizer, block_size, batch and LR settings: only N (and D = 20N) change.
+model:
+  preset: scale_1m
+  block_size: 512
+  dropout: 0.0
+data:
+  dir: data/processed/v1_bpe8192
+train:
+  batch_size: 32
+  grad_accum_steps: 4      # tokens/step = 65,536 (scale_1m -> ~406 steps)
+  tokens_per_param: 20
+  max_lr: 6.0e-4
+  min_lr: 6.0e-5
+  warmup_frac: 0.03
+  weight_decay: 0.1
+  betas: [0.9, 0.95]
+  grad_clip: 1.0
+  seed: 42
+eval:
+  interval: 250
+  iters: 40
+  batch_size: 32
+log:
+  interval: 20
+  ckpt_interval: 250
+  sample_prompt: "Việt Nam là"

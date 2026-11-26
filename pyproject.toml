@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "minigpt-vi"
+version = "0.1.0"
+description = "Vietnamese Mini-GPT from scratch (AIT3001 Topic 9)"
+readme = "README.md"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
