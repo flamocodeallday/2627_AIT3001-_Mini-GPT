@@ -121,3 +121,26 @@ class MemmapTextDataset(Dataset):
 |---|---|---:|---:|---|---|---|
 | `v0_byte` | `byte_level` | 257 | 256 | Lát cắt ~10 / 1 / 1 MiB | *(cập nhật từ `meta.json`)* | `[Điền link Google Drive v0_byte tại đây]` |
 | `v1_bpe8192` | `custom_regex_bpe` | 8192 | 256 | `263,990,187` / `2,775,101` / `2,777,879` | `951cb42b935d6a837c568a57610749a6ce1be4ce6c0d323c77ee697ae4957f68` | `[Điền link Google Drive v1_bpe8192 tại đây]` |
+
+---
+
+## Mô hình GPT (Thành viên 2)
+
+Bối cảnh, bản đồ file và danh sách bài tự cài: `docs/role2_gpt/gpt_todo.md`.
+
+```powershell
+pytest -q tests/test_gpt.py tests/test_train.py        # chấm từng phần: thêm -k attention, -k train_step, ...
+python -m scripts.smoke_test                            # train → checkpoint → load → eval → generate trên v0_byte (CPU)
+python -m src.train.train --config configs/gpt/tiny_debug.yaml
+```
+
+Trên Colab (GPU), model chính và thang scaling (quyết định A–C: 8×512, `block_size` 512, D = 20 × N_non-emb):
+
+```bash
+python -m src.train.train --config configs/gpt/main_30m.yaml --device cuda
+python -m src.train.train --config configs/gpt/scaling.yaml --preset scale_3m --device cuda
+python -m src.train.train --config configs/gpt/main_30m.yaml --device cuda --resume checkpoints/<run_id>/last.pt
+```
+
+- Checkpoint: `checkpoints/<run_id>/{best,last}.pt` (bị gitignore), theo hợp đồng `{state_dict, config, tokenizer_meta, step, val_loss}`. TV3 load bằng `GPTAdapter.from_checkpoint(path, model_builder=src.train.checkpoint.gpt_model_builder)`.
+- Log TensorBoard: `logs/tb/<run_id>`. Tóm tắt mỗi run (config, số tham số, số token, token/tham số, commit, phần cứng): `results/train_<run_id>.json`.

@@ -1,0 +1,32 @@
+# Main GPT (decisions A-C, 25/11/2026)
+#   preset main_30m = 8 layers x 512, 8 heads, tied embeddings, block_size (= eval ctx) 512
+#   params: ~25.2M non-embedding, ~29.6M total (vocab 8192)
+#   budget: D = 20 x N_non_emb ~ 504M tokens ~ 1.9 epochs of the 264M-token train split
+#   tokens/step = 32 x 4 x 512 = 65,536  ->  ~7,690 optimizer steps
+#   Train settings are IDENTICAL to configs/gpt/scaling.yaml: this run is the largest point of the
+#   GPT scaling curve (decision C), so do not tune it separately.
+model:
+  preset: main_30m
+  block_size: 512
+  dropout: 0.0            # ~2 epochs on 264M tokens: start without dropout, watch train/val gap
+data:
+  dir: data/processed/v1_bpe8192
+train:
+  batch_size: 32          # micro-batch; lower it (and raise grad_accum_steps) if the GPU runs out of memory
+  grad_accum_steps: 4
+  tokens_per_param: 20    # decision C
+  max_lr: 6.0e-4
+  min_lr: 6.0e-5
+  warmup_frac: 0.03
+  weight_decay: 0.1
+  betas: [0.9, 0.95]
+  grad_clip: 1.0
+  seed: 42
+eval:
+  interval: 250
+  iters: 40
+  batch_size: 32
+log:
+  interval: 20
+  ckpt_interval: 250
+  sample_prompt: "Việt Nam là"

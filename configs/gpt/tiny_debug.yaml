@@ -1,0 +1,27 @@
+# Smoke / debug run on v0_byte (byte-level, vocab 257). CPU-friendly: ~0.4M non-emb params.
+# Numbers from this config are DEBUG only and never go into the report.
+model:
+  preset: tiny_debug
+  block_size: 128
+  dropout: 0.0
+data:
+  dir: data/processed/v0_byte
+train:
+  batch_size: 16
+  grad_accum_steps: 1
+  max_steps: 200          # fixed step count instead of the token budget
+  max_lr: 3.0e-3
+  min_lr: 3.0e-4
+  warmup_steps: 20
+  weight_decay: 0.1
+  betas: [0.9, 0.95]
+  grad_clip: 1.0
+  seed: 42
+eval:
+  interval: 50
+  iters: 10
+  batch_size: 16
+log:
+  interval: 10
+  ckpt_interval: 100
+  sample_prompt: "Việt Nam là"
