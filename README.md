@@ -121,8 +121,8 @@ class MemmapTextDataset(Dataset):
 
 | Phiên bản | Tokenizer | `vocab_size` | `eos_id` | Số token (`train` / `val` / `test`) | `tokenizer_hash` (SHA-256) | Link tải |
 |---|---|---:|---:|---|---|---|
-| `v0_byte` | `byte_level` | 257 | 256 | Lát cắt ~10 / 1 / 1 MiB | *(cập nhật từ `meta.json`)* | `[Điền link Google Drive v0_byte tại đây]` |
-| `v1_bpe8192` | `custom_regex_bpe` | 8192 | 256 | `263,990,187` / `2,775,101` / `2,777,879` | `951cb42b935d6a837c568a57610749a6ce1be4ce6c0d323c77ee697ae4957f68` | `[Điền link Google Drive v1_bpe8192 tại đây]` |
+| `v0_byte` | `byte_level` | 257 | 256 | Lát cắt ~10 / 1 / 1 MiB | *(cập nhật từ `meta.json`)* | `[https://drive.google.com/drive/folders/1rGPjZXgi_NKcFNYaWkh2PLC1CqsP7Phn?usp=drive_link]` |
+| `v1_bpe8192` | `custom_regex_bpe` | 8192 | 256 | `263,990,187` / `2,775,101` / `2,777,879` | `951cb42b935d6a837c568a57610749a6ce1be4ce6c0d323c77ee697ae4957f68` | `[https://drive.google.com/drive/folders/1uR8okWCh4y1EnIcqfWxdLkEtsV6sTXgm?usp=drive_link]` |
 
 ---
 
