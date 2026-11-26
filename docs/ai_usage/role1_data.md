@@ -1,8 +1,8 @@
-# Nhật ký sử dụng công cụ AI (`docs/ai_usage.md`)
+# AI usage — Thành viên 1: Corpus & Tokenizer (`src/data/`)
 
-> Theo quy định của đề bài, mọi công cụ AI được sử dụng trong quá trình làm dự án đều phải được khai báo rõ mục đích, phạm vi và cách kiểm chứng.
+> Mục lục và quy ước chung: [`README.md`](README.md).
 
-## Tuần 2 — Thành viên 1 (Corpus & Tokenizer)
+## Tuần 2
 
 ### Gói 1: Khung Repo & Pipeline làm sạch/chia dữ liệu (`16/11/2026`)
 - **Công cụ sử dụng:** Trợ lý AI lập trình (Antigravity).
