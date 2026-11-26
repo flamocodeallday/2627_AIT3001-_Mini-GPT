@@ -126,7 +126,7 @@ class MemmapTextDataset(Dataset):
 
 ## Mô hình GPT (Thành viên 2)
 
-Bối cảnh, bản đồ file và danh sách bài tự cài: `docs/role2_gpt/gpt_todo.md`.
+Phân công (phần AI dựng, phần tự cài) và những gì rút ra khi làm: `docs/ai_usage/role2_gpt.md`.
 
 ```powershell
 pytest -q tests/test_gpt.py tests/test_train.py        # chấm từng phần: thêm -k attention, -k train_step, ...

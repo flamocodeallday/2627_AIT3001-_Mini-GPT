@@ -3,7 +3,7 @@
 Who wrote what (also recorded in docs/ai_usage/role2_gpt.md):
   * Module wiring in every `__init__`, weight init and weight tying: scaffolding (AI-assisted).
   * Every method that raises `NotImplementedError("TODO(todd): ...")`: Todd (member 2)
-    implements by hand. Specs, shapes and test commands are in docs/role2_gpt/gpt_todo.md.
+    implements by hand. Specs and shapes are in each docstring; graded by tests/test_gpt.py.
 
 Rules for the core: do NOT use `F.scaled_dot_product_attention`, `nn.MultiheadAttention`
 or `nn.TransformerDecoderLayer` here. They are only allowed in tests, as a reference.

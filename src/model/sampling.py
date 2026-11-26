@@ -1,6 +1,6 @@
 """Next-token sampling strategies: greedy, temperature, top-k, top-p (nucleus).
 
-All three functions are exercises for Todd (member 2). See docs/role2_gpt/gpt_todo.md, bài 6 và 7.
+All three functions are exercises for Todd (member 2). Graded by tests/test_gpt.py (-k "top_k or top_p or sample").
 Shapes: logits is (B, V) = un-normalized scores for the NEXT token of each sequence.
 """
 
