@@ -23,35 +23,22 @@ LSTM_SCALING_PRESETS = [
 
 
 def _load_gpt_presets_and_cls(preset_names: List[str], vocab_size: int, ctx: int):
-    """Đọc PRESETS và GPTConfig từ src.model.config của Thành viên 2."""
+    """Đọc PRESETS, SCALING_LADDER và make_config từ src.model.config của Thành viên 2."""
     try:
-        from src.model.config import PRESETS, GPTConfig  # type: ignore
-        import src.model as model_pkg  # type: ignore
+        from src.model import GPT, PRESETS, SCALING_LADDER, make_config  # type: ignore
     except ImportError as exc:
         raise RuntimeError(
-            "Không thể import src.model.config (PRESETS, GPTConfig) của TV2. "
+            "Không thể import src.model (PRESETS, SCALING_LADDER, GPT) của TV2. "
             "Hãy merge nhánh TV2 trước khi chạy --arch gpt, hoặc dùng --arch lstm để chạy đường phụ."
         ) from exc
 
-    gpt_cls = getattr(model_pkg, "MiniGPT", None) or getattr(model_pkg, "GPT", None)
-    if gpt_cls is None:
-        from src.model.gpt import GPT as gpt_cls  # type: ignore
-
-    selected = preset_names if preset_names else list(PRESETS.keys())
+    selected = preset_names if preset_names else list(SCALING_LADDER)
     configs = []
     for name in selected:
         if name not in PRESETS:
             raise ValueError(f"Preset '{name}' không có trong src.model.config.PRESETS: {list(PRESETS.keys())}")
-        raw = PRESETS[name]
-        if isinstance(raw, GPTConfig):
-            cfg_dict = dict(raw.__dict__)
-        else:
-            cfg_dict = dict(raw)
-        cfg_dict["vocab_size"] = vocab_size
-        if "block_size" in cfg_dict:
-            cfg_dict["block_size"] = ctx
-        configs.append((name, GPTConfig(**cfg_dict)))
-    return configs, gpt_cls
+        configs.append((name, make_config(name, vocab_size=vocab_size, block_size=ctx)))
+    return configs, GPT
 
 
 def plot_scaling_curve(records: list, out_png: str, arch: str):
@@ -125,7 +112,21 @@ def _train_one_run(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model_nn.to(device)
 
-    optimizer = torch.optim.AdamW(model_nn.parameters(), lr=args.lr, weight_decay=0.01)
+    use_amp = bool(args.amp and device.type == "cuda")
+    amp_dtype = torch.bfloat16 if (use_amp and torch.cuda.is_bf16_supported()) else torch.float16
+    scaler = torch.amp.GradScaler("cuda", enabled=(use_amp and amp_dtype == torch.float16))
+
+    optimizer = torch.optim.AdamW(
+        model_nn.parameters(),
+        lr=args.lr,
+        betas=(0.9, 0.95) if is_gpt else (0.9, 0.999),
+        weight_decay=args.weight_decay if is_gpt else 0.01,
+    )
+
+    print(
+        f"\n>>> Bắt đầu [{args.arch.upper()} | {name}] N_non_emb={n_non_emb:,} | "
+        f"Target D={target_tokens:,} | Steps={total_steps} | Device={device} | AMP={use_amp}"
+    )
 
     t0 = time.time()
     model_nn.train()
@@ -139,16 +140,28 @@ def _train_one_run(
             pg["lr"] = lr
 
         optimizer.zero_grad(set_to_none=True)
+        accum_loss = 0.0
         for _ in range(args.grad_accum):
             xb, yb = get_batch(train_data, args.batch_size, args.ctx, device)
-            if is_gpt:
-                _, loss = model_nn(xb, targets=yb)
-            else:
-                _, loss, _ = model_nn(xb, yb)
-            (loss / args.grad_accum).backward()
+            with torch.amp.autocast("cuda", dtype=amp_dtype, enabled=use_amp):
+                if is_gpt:
+                    _, loss = model_nn(xb, targets=yb)
+                else:
+                    _, loss, _ = model_nn(xb, yb)
+                scaled_loss = loss / args.grad_accum
+            scaler.scale(scaled_loss).backward()
+            accum_loss += float(loss.item()) / args.grad_accum
 
+        scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model_nn.parameters(), 1.0)
-        optimizer.step()
+        scaler.step(optimizer)
+        scaler.update()
+
+        if step == 1 or step % args.log_interval == 0 or step == total_steps:
+            print(
+                f"  [{name}] Step {step:5d}/{total_steps} | Loss: {accum_loss:.4f} | "
+                f"LR: {lr:.2e} | Elapsed: {time.time() - t0:.1f}s"
+            )
 
     train_time_sec = round(time.time() - t0, 1)
     tokens_seen = total_steps * tokens_per_step
@@ -264,11 +277,14 @@ if __name__ == "__main__":
     parser.add_argument("--data_dir", type=str, default="data/processed/v1_bpe8192")
     parser.add_argument("--presets", type=str, nargs="*", default=[], help="Danh sách preset cần chạy")
     parser.add_argument("--ctx", type=int, default=512)
-    parser.add_argument("--batch_size", type=int, default=16)
-    parser.add_argument("--grad_accum", type=int, default=1)
+    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--grad_accum", type=int, default=4)
     parser.add_argument("--lr", type=float, default=6e-4)
     parser.add_argument("--min_lr_ratio", type=float, default=0.1)
-    parser.add_argument("--warmup_ratio", type=float, default=0.05)
+    parser.add_argument("--warmup_ratio", type=float, default=0.03)
+    parser.add_argument("--weight_decay", type=float, default=0.1)
+    parser.add_argument("--amp", action="store_true", help="Bật BF16/FP16 Mixed Precision trên CUDA")
+    parser.add_argument("--log_interval", type=int, default=100)
     parser.add_argument(
         "--token_multiplier",
         type=float,

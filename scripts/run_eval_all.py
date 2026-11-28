@@ -9,7 +9,14 @@ from src.eval.gpt_adapter import GPTAdapter
 
 
 def _build_gpt_from_src_model(cfg):
-    """Tải lớp GPT và GPTConfig từ src.model của Thành viên 2."""
+    """Tải lớp GPT từ src.train.checkpoint.gpt_model_builder (hoặc src.model) của Thành viên 2."""
+    try:
+        from src.train.checkpoint import gpt_model_builder  # type: ignore
+
+        return gpt_model_builder(cfg)
+    except ImportError:
+        pass
+
     try:
         from src.model.config import GPTConfig  # type: ignore
         import src.model as model_pkg  # type: ignore
@@ -19,12 +26,12 @@ def _build_gpt_from_src_model(cfg):
             "Hãy merge nhánh TV2 trước khi đánh giá --gpt_ckpt."
         ) from exc
 
-    gpt_cls = getattr(model_pkg, "MiniGPT", None) or getattr(model_pkg, "GPT", None)
+    gpt_cls = getattr(model_pkg, "GPT", None) or getattr(model_pkg, "MiniGPT", None)
     if gpt_cls is None:
         from src.model.gpt import GPT as gpt_cls  # type: ignore
 
     if isinstance(cfg, dict):
-        cfg = GPTConfig(**cfg)
+        cfg = GPTConfig.from_dict(cfg) if hasattr(GPTConfig, "from_dict") else GPTConfig(**cfg)
     return gpt_cls(cfg)
 
 

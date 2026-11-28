@@ -112,3 +112,40 @@ def test_gpt_adapter_from_checkpoint_and_hash_check(tmp_path):
     adapter.tokenizer_hash = "mismatched_hash"
     with pytest.raises(ValueError, match="Lệch tokenizer_hash"):
         evaluate_model(adapter, ds, split="val", ctx=64, max_tokens=None, save_dir=None)
+
+
+def test_gpt_adapter_with_real_tv2_gpt_and_checkpoint(tmp_path):
+    """Kiểm thử tích hợp trực tiếp GPTAdapter với GPT thật và save_checkpoint của TV2."""
+    from src.model import GPT, make_config, estimate_params
+    from src.train.checkpoint import save_checkpoint, gpt_model_builder
+
+    ds = _make_dataset(tmp_path, vocab_size=64, n_val=200)
+    cfg = make_config("tiny_debug", vocab_size=ds.vocab_size, block_size=64)
+    gpt = GPT(cfg)
+
+    ckpt_path = tmp_path / "tv2_tiny.pt"
+    save_checkpoint(
+        ckpt_path,
+        model=gpt,
+        tokenizer_meta={
+            "version": ds.version,
+            "vocab_size": ds.vocab_size,
+            "tokenizer_hash": ds.tokenizer_hash,
+        },
+        step=10,
+        val_loss=4.1,
+        train_args={"batch_size": 4, "grad_accum_steps": 2, "block_size": 64, "max_lr": 6e-4},
+    )
+
+    adapter = GPTAdapter.from_checkpoint(str(ckpt_path), model_builder=gpt_model_builder, name="tiny_gpt", device="cpu")
+    expected_params = estimate_params(cfg)
+    counted = adapter.count_params()
+    assert counted["total_params"] == expected_params["total"]
+    assert counted["non_embedding_params"] == expected_params["non_embedding"]
+    assert adapter.train_tokens == 10 * 4 * 2 * 64
+
+    res = evaluate_model(adapter, ds, split="val", ctx=64, max_tokens=None, save_dir=None)
+    assert res.tag == "official"
+    assert res.num_tokens == 199
+    assert res.perplexity > 0
+    assert res.train_tokens == 10 * 4 * 2 * 64

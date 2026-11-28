@@ -14,18 +14,18 @@ import numpy as np
 def _load_uint16_memmap(bin_path: str) -> np.ndarray:
     """
     Đọc mảng token uint16 từ file .bin.
-    Ưu tiên dùng chung MemmapDataset của TV1 (src.data) nếu đã có trong repo,
-    nếu chưa thì dùng np.memmap trực tiếp.
+    Dùng chung MemmapDataset của TV1 (src.data.pack) theo quy ước repo,
+    fallback về np.memmap nếu file quá ngắn (<= 1 token) hoặc thiếu module.
     """
     try:
-        from src.data.dataset import MemmapDataset  # type: ignore
+        from src.data.pack import MemmapDataset  # type: ignore
 
-        ds = MemmapDataset(bin_path)
+        ds = MemmapDataset(bin_path, block_size=1)
         if hasattr(ds, "data"):
             return ds.data
     except Exception:
         pass
-    return np.memmap(bin_path, dtype=np.uint16, mode="r")
+    return np.memmap(bin_path, dtype="<u2", mode="r")
 
 
 class DatasetBundle:

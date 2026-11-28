@@ -119,6 +119,22 @@ class GPTAdapter(BaseLanguageModel):
             name=name,
             device=device,
         )
-        adapter.train_tokens = ckpt.get("train_tokens")
-        adapter.train_config = ckpt.get("train_config") or {}
+        train_cfg = ckpt.get("train_config") or ckpt.get("train_args") or {}
+        train_tokens = ckpt.get("train_tokens")
+        if train_tokens is None and isinstance(train_cfg, dict):
+            train_tokens = train_cfg.get("tokens_seen") or train_cfg.get("train_tokens")
+            if train_tokens is None and "step" in ckpt:
+                step = int(ckpt["step"])
+                bs = train_cfg.get("batch_size")
+                ga = train_cfg.get("grad_accum_steps", train_cfg.get("grad_accum", 1))
+                blk = (
+                    train_cfg.get("block_size")
+                    or train_cfg.get("ctx")
+                    or (cfg.get("block_size") if isinstance(cfg, dict) else getattr(cfg, "block_size", None))
+                )
+                if bs and blk:
+                    train_tokens = int(step * int(bs) * int(ga) * int(blk))
+
+        adapter.train_tokens = int(train_tokens) if train_tokens is not None else None
+        adapter.train_config = dict(train_cfg) if isinstance(train_cfg, dict) else {}
         return adapter
